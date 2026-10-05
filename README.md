@@ -30,35 +30,39 @@ docker compose up --build
 
 ```
 com.coupon
-├── domain            Regras de negócio. Java puro, sem framework.
-│   ├── Coupon              agregado: create(...) e delete(...)
-│   ├── CouponCode          VO: alfanumérico, 6 chars, remove caracteres especiais
-│   ├── DiscountValue       VO: mínimo 0,5, sem máximo
-│   └── exceptions          InvalidCoupon / CouponAlreadyDeleted
-├── application       Orquestração. Só depende de interfaces (portas).
-│   ├── port/CouponRepository   porta de saída
-│   └── Create/Get/DeleteCouponUseCase   um único método público: execute
-└── infra             Detalhes técnicos (pode importar Spring/JPA)
-    ├── web             controller fino, DTOs, tradução de exceções em HTTP
-    ├── persistence     entidade JPA (≠ domínio), mapper, adapter da porta
-    └── config          montagem dos beans, Clock, OpenAPI
+├── domain                    Regras de negócio, sem dependências de framework.
+│   ├── model                  Agregado Coupon e enum CouponStatus
+│   ├── valueobject            CouponCode e DiscountValue
+│   └── exception              Exceções de domínio
+├── application               Orquestração dos casos de uso.
+│   ├── port/in                Contratos de entrada: CreateCoupon, GetCoupon, DeleteCoupon
+│   ├── port/out               Contrato de saída: CouponRepository
+│   ├── usecase                Implementações dos casos de uso
+│   ├── dto                    Commands e outputs da aplicação
+│   └── exception              Exceções da aplicação
+├── adapter                   Integrações com entrada e saída.
+│   ├── in/web                 API HTTP, requests/responses e tratamento de erros
+│   └── out/persistence        Adapter JPA, entidade, mapper e Spring Data
+└── bootstrap                 Configuração Spring e montagem dos beans, incluindo Clock
 ```
 
-- O **UseCase não tem `if` de negócio**: busca, chama o domínio e salva.
-- A **entidade JPA é separada do domínio** (`CouponJpaEntity` ↔ `Coupon`).
-- A camada `application` não tem anotações Spring; os beans são montados em `infra/config`.
-- `ArchitectureTest` (ArchUnit) garante que `domain`/`application` não importam Spring, JPA ou `infra`, e que cada UseCase expõe só `execute`.
+- O adapter HTTP depende das **portas de entrada**, não das implementações dos casos de uso.
+- Os casos de uso dependem da porta de saída `CouponRepository`; o adapter JPA a implementa.
+- O fluxo de criação/deleção orquestra domínio e persistência; as regras de negócio ficam no agregado e nos *value objects*.
+- A entidade JPA é separada do modelo de domínio (`CouponJpaEntity` ↔ `Coupon`) e a conversão é feita por `CouponPersistenceMapper`.
+- A camada `application` não tem anotações Spring; os beans e o `Clock` são montados em `bootstrap/UseCaseConfig`.
+- `ArchitectureTest` (ArchUnit) verifica o isolamento de `domain` e `application`, a dependência do adapter web nas portas de entrada e que cada UseCase expõe apenas `execute`.
 
 ## Regras de negócio → testes
 
 | Regra | Onde é testada |
 |-------|----------------|
-| Obrigatórios: code, description, discountValue, expirationDate | `CouponTest`, `CouponApiIntegrationTest#rejectsMissingRequiredFields` |
-| Código com 6 caracteres; especiais removidos antes de salvar e retornar | `CouponTest`, `CreateCouponUseCaseTest`, `CouponApiIntegrationTest` |
-| Desconto mínimo 0,5, sem máximo | `CouponTest`, `CouponApiIntegrationTest` |
-| Nunca criar com expiração no passado | `CouponTest`, `CreateCouponUseCaseTest`, `CouponApiIntegrationTest` |
-| Pode ser criado já publicado | `CouponTest`, `CreateCouponUseCaseTest`, `CouponApiIntegrationTest` |
-| Delete a qualquer momento (soft delete, dados preservados) | `CouponTest`, `DeleteCouponUseCaseTest`, `CouponApiIntegrationTest#deleteReturns204AndKeepsTheDataInTheDatabase` |
+| Obrigatórios: code, description, discountValue, expirationDate | `CouponTest`, `CouponApiIntegrationTest#rejectsMissingRequiredFields`, `#rejectsNullRequiredFields` e `#rejectsBlankRequiredTextFields` |
+| Código com 6 caracteres; especiais removidos antes de salvar e retornar | `CouponTest`, `CouponApiIntegrationTest#sanitizesCodeBeforeReturningAndPersisting` |
+| Desconto mínimo 0,5, sem máximo | `CouponTest`, `CouponApiIntegrationTest#acceptsMinimumDiscount` e `#acceptsLargeDiscountWithoutBusinessMaximum` |
+| Nunca criar com expiração no passado | `CouponTest`, `CreateCouponUseCaseTest`, `CouponApiIntegrationTest#rejectsExpirationDateInThePast` |
+| Pode ser criado já publicado | `CouponTest`, `CreateCouponUseCaseTest`, `CouponApiIntegrationTest#createsAlreadyPublishedCoupon` |
+| Delete a qualquer momento (soft delete, dados preservados) | `CouponTest`, `DeleteCouponUseCaseTest`, `CouponApiIntegrationTest#deleteReturns204AndKeepsTheDataInTheDatabase` e `#canDeleteAnExpiredCouponThroughEndpoint` |
 | Não deletar duas vezes | `CouponTest`, `DeleteCouponUseCaseTest`, `CouponApiIntegrationTest#cannotDeleteTheSameCouponTwice` |
 
 Os testes de integração usam H2 real (sem mocks); os de UseCase usam um *fake* em memória da porta, não um mock.
