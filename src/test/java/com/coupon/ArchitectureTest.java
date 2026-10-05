@@ -22,16 +22,21 @@ class ArchitectureTest {
     @ArchTest
     static final ArchRule domainIsPure = noClasses().that().resideInAPackage("..domain..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..application..", "..infra..", "org.springframework..", "jakarta..", "org.hibernate..",
-                    "com.fasterxml..");
+                    "..application..", "..adapter..", "..bootstrap..", "org.springframework..", "jakarta..",
+                    "org.hibernate..", "com.fasterxml..");
 
     @ArchTest
     static final ArchRule applicationDoesNotKnowTheOutsideWorld = noClasses().that().resideInAPackage("..application..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "..infra..", "org.springframework..", "jakarta..", "org.hibernate..", "com.fasterxml..");
+                    "..adapter..", "..bootstrap..", "org.springframework..", "jakarta..", "org.hibernate..",
+                    "com.fasterxml..");
 
     @ArchTest
-    static final ArchRule useCasesExposeOnlyExecute = classes().that().resideInAPackage("..application..")
+    static final ArchRule webAdaptersDependOnInputPorts = noClasses().that().resideInAPackage("..adapter.in.web..")
+            .should().dependOnClassesThat().resideInAPackage("..application.usecase..");
+
+    @ArchTest
+    static final ArchRule useCasesExposeOnlyExecute = classes().that().resideInAPackage("..application.usecase..")
             .and().haveSimpleNameEndingWith("UseCase")
             .should(haveASinglePublicMethodNamedExecute());
 

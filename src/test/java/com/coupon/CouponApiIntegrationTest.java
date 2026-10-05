@@ -1,8 +1,8 @@
 package com.coupon;
 
-import com.coupon.domain.CouponStatus;
-import com.coupon.infra.persistence.CouponJpaEntity;
-import com.coupon.infra.persistence.SpringDataCouponRepository;
+import com.coupon.domain.model.CouponStatus;
+import com.coupon.adapter.out.persistence.CouponJpaEntity;
+import com.coupon.adapter.out.persistence.SpringDataCouponRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -14,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
@@ -77,6 +78,21 @@ class CouponApiIntegrationTest {
     }
 
     @Test
+    void sanitizesCodeBeforeReturningAndPersisting() throws Exception {
+        Map<String, Object> body = validBody();
+        body.put("code", "A!B@C#1$2%3");
+
+        String response = postCoupon(body)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("ABC123"))
+                .andReturn().getResponse().getContentAsString();
+        String id = objectMapper.readTree(response).get("id").asText();
+
+        CouponJpaEntity stored = jpaRepository.findById(Long.parseLong(id)).orElseThrow();
+        assertThat(stored.getCode()).isEqualTo("ABC123");
+    }
+
+    @Test
     void createsAlreadyPublishedCoupon() throws Exception {
         Map<String, Object> body = validBody();
         body.put("published", true);
@@ -109,6 +125,22 @@ class CouponApiIntegrationTest {
     }
 
     @Test
+    void acceptsLargeDiscountWithoutBusinessMaximum() throws Exception {
+        BigDecimal discount = new BigDecimal("999999999999999999999999999.99");
+        Map<String, Object> body = validBody();
+        body.put("discountValue", discount);
+
+        String response = postCoupon(body)
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String id = objectMapper.readTree(response).get("id").asText();
+
+        assertThat(response).contains("\"discountValue\":" + discount.toPlainString());
+        assertThat(jpaRepository.findById(Long.parseLong(id)).orElseThrow().getDiscountValue())
+                .isEqualByComparingTo(discount);
+    }
+
+    @Test
     void rejectsCodeThatIsNotSixCharactersAfterSanitizing() throws Exception {
         Map<String, Object> body = validBody();
         body.put("code", "ABC-12");
@@ -121,6 +153,24 @@ class CouponApiIntegrationTest {
     void rejectsMissingRequiredFields(String field) throws Exception {
         Map<String, Object> body = validBody();
         body.remove(field);
+
+        postCoupon(body).andExpect(status().isBadRequest());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"code", "description", "discountValue", "expirationDate"})
+    void rejectsNullRequiredFields(String field) throws Exception {
+        Map<String, Object> body = validBody();
+        body.put(field, null);
+
+        postCoupon(body).andExpect(status().isBadRequest());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"code", "description"})
+    void rejectsBlankRequiredTextFields(String field) throws Exception {
+        Map<String, Object> body = validBody();
+        body.put(field, "   ");
 
         postCoupon(body).andExpect(status().isBadRequest());
     }
@@ -167,6 +217,21 @@ class CouponApiIntegrationTest {
         assertThat(stored.getCode()).isEqualTo("ABC123");
         assertThat(stored.getDescription()).isEqualTo("Cupom de teste");
         assertThat(stored.getDiscountValue()).isEqualByComparingTo("0.8");
+    }
+
+    @Test
+    void canDeleteAnExpiredCouponThroughEndpoint() throws Exception {
+        String id = createCouponAndGetId();
+        CouponJpaEntity stored = jpaRepository.findById(Long.parseLong(id)).orElseThrow();
+        stored.setExpirationDate(Instant.now().minus(1, ChronoUnit.DAYS));
+        jpaRepository.saveAndFlush(stored);
+
+        mockMvc.perform(delete("/coupon/" + id)).andExpect(status().isNoContent());
+
+        CouponJpaEntity deleted = jpaRepository.findById(Long.parseLong(id)).orElseThrow();
+        assertThat(deleted.getStatus()).isEqualTo(CouponStatus.DELETED);
+        assertThat(deleted.getDeletedAt()).isNotNull();
+        assertThat(deleted.getExpirationDate()).isBefore(Instant.now());
     }
 
     @Test
